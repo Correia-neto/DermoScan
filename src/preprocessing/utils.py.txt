@@ -1,0 +1,48 @@
+import numpy as np
+import cv2
+from PIL import Image
+import io
+
+# Define as dimensões que o nosso modelo de IA espera
+IMG_WIDTH = 224
+IMG_HEIGHT = 224
+
+def preprocess_image(file_bytes: bytes) -> np.ndarray:
+    """
+    Lê os bytes de uma imagem, pré-processa e a prepara para o modelo.
+
+    Args:
+        file_bytes: A imagem em formato de bytes (recebida do upload).
+
+    Returns:
+        Um array NumPy pronto para ser usado pelo modelo TensorFlow.
+    """
+    try:
+        # 1. Ler a imagem a partir dos bytes usando Pillow e converter para NumPy array
+        # Pillow lida bem com diferentes formatos de imagem (JPG, PNG, etc.)
+        image = Image.open(io.BytesIO(file_bytes))
+        
+        # Converter para o formato que o OpenCV usa (BGR)
+        # O Pillow abre em RGB, então convertemos para BGR
+        image_np = np.array(image)
+        if image_np.shape[2] == 4: # Se tiver canal alfa (PNG), remove
+            image_np = image_np[:, :, :3]
+            
+        image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+    except Exception as e:
+        print(f"Erro ao ler a imagem: {e}")
+        raise ValueError("Formato de imagem inválido ou arquivo corrompido.")
+
+    # 2. Redimensionar a imagem para o tamanho esperado pelo modelo (224x224)
+    resized_image = cv2.resize(image_cv, (IMG_WIDTH, IMG_HEIGHT))
+
+    # 3. Normalizar os pixels da imagem
+    # Dividimos por 255.0 para que os valores fiquem no intervalo [0, 1]
+    normalized_image = resized_image / 255.0
+
+    # 4. Expandir as dimensões do array
+    # O modelo espera um "lote" de imagens, então transformamos (224, 224, 3) em (1, 224, 224, 3)
+    expanded_image = np.expand_dims(normalized_image, axis=0)
+
+    return expanded_image

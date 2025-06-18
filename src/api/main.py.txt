@@ -1,0 +1,111 @@
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
+import tensorflow as tf
+import numpy as np
+import os
+from typing import Dict
+
+# Importa nossa função de pré-processamento
+from src.preprocessing.utils import preprocess_image
+
+# --- Configuração Inicial ---
+
+# Cria a aplicação FastAPI
+app = FastAPI(
+    title="DermoScan API",
+    description="Uma API para análise preliminar de lesões de pele usando um modelo de Deep Learning.",
+    version="1.0.0"
+)
+
+# --- Carregamento do Modelo ---
+
+# Caminho para o modelo treinado.
+# IMPORTANTE: Você precisa colocar seu arquivo de modelo treinado (ex: DermoScan_MobileNetV2.h5)
+# dentro da pasta /models e garantir que este caminho esteja correto.
+MODEL_PATH = os.path.join("models", "DermoScan_MobileNetV2.h5") 
+
+model = None
+try:
+    if os.path.exists(MODEL_PATH):
+        model = tf.keras.models.load_model(MODEL_PATH)
+        print("✅ Modelo de IA carregado com sucesso!")
+    else:
+        print(f"❌ ERRO: Arquivo do modelo não encontrado em '{MODEL_PATH}'")
+        model = None
+except Exception as e:
+    print(f"❌ ERRO ao carregar o modelo: {e}")
+    model = None
+
+# Nomes das classes que o modelo pode prever (baseado no dataset HAM10000)
+CLASS_NAMES = [
+    'Dermatofibroma',
+    'Ceratose actínica',
+    'Carcinoma basocelular',
+    'Lesão benigna semelhante a ceratose',
+    'Melanoma',
+    'Nevo melanocítico',
+    'Lesão vascular'
+]
+
+# Mapeamento simples para um nível de risco sugerido
+RISK_MAPPING = {
+    'Melanoma': 'Alto Risco',
+    'Carcinoma basocelular': 'Alto Risco',
+    'Ceratose actínica': 'Médio Risco',
+    'Nevo melanocítico': 'Baixo Risco',
+    'Lesão benigna semelhante a ceratose': 'Baixo Risco',
+    'Dermatofibroma': 'Baixo Risco',
+    'Lesão vascular': 'Baixo Risco'
+}
+
+# --- Endpoints da API ---
+
+@app.get("/", tags=["Status"])
+def read_root():
+    """Endpoint principal para verificar se a API está funcionando."""
+    return {"status": "DermoScan API está no ar!", "model_loaded": model is not None}
+
+@app.post("/analyze", tags=["Análise"], response_model=Dict)
+async def analyze_skin_lesion(image_file: UploadFile = File(...)):
+    """
+    Recebe uma imagem de uma lesão de pele, a analisa e retorna a classificação.
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Modelo de IA não está disponível. Verifique os logs do servidor.")
+
+    # Validação do tipo de arquivo
+    if not image_file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="O arquivo enviado não é uma imagem.")
+
+    try:
+        # Lê o conteúdo do arquivo
+        contents = await image_file.read()
+
+        # Pré-processa a imagem usando nossa função do utils.py
+        processed_image = preprocess_image(contents)
+
+        # Realiza a predição com o modelo
+        prediction_array = model.predict(processed_image)
+
+        # Processa o resultado
+        predicted_index = np.argmax(prediction_array)
+        predicted_class = CLASS_NAMES[predicted_index]
+        confidence = float(np.max(prediction_array))
+        risk_level = RISK_MAPPING.get(predicted_class, 'Indeterminado')
+
+        # Monta a resposta
+        response_data = {
+            "classification": predicted_class,
+            "confidence": f"{confidence:.2%}",
+            "risk_level": risk_level,
+            "disclaimer": "ATENÇÃO: Este resultado é uma análise preliminar e NÃO substitui um diagnóstico médico. Consulte um dermatologista."
+        }
+        
+        return JSONResponse(content=response_data)
+
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        # Captura outras exceções inesperadas
+        print(f"Erro inesperado durante a análise: {e}")
+        raise HTTPException(status_code=500, detail="Ocorreu um erro interno ao processar a imagem.")
